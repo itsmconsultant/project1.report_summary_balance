@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Report System - Secure Login</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background-color: #f4f7f6; display: flex; flex-direction: column; min-height: 100vh; }
+        
+        /* Styling Form Login */
+        #loginContainer { width: 100%; max-width: 400px; margin: auto; padding: 30px; background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .login-group { margin-bottom: 15px; display: flex; flex-direction: column; }
+        .login-group input { padding: 12px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px; }
+        #btnLogin { width: 100%; padding: 12px; background-color: #0056b3; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+
+        /* Styling Dashboard (Hidden by default) */
+        #mainContent { display: none; padding: 20px; }
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        
+        .parameter-section { display: flex; gap: 15px; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
+        .input-group { display: flex; flex-direction: column; }
+        label { font-size: 11px; font-weight: bold; margin-bottom: 5px; color: #555; }
+        input, button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        
+        #btnView { background-color: #0056b3; color: white; cursor: pointer; border: none; font-weight: bold; }
+        #btnExport { background-color: #217346; color: white; cursor: pointer; border: none; font-weight: bold; display: none; }
+        #btnLogout { background-color: #dc3545; color: white; border: none; cursor: pointer; padding: 5px 15px; }
+
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto; /* Memunculkan scroll bar jika tabel terlalu lebar */
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        table { width: 100%; border-collapse: collapse;}
+        th, td { padding: 10px; border: 1px solid #ddd; font-size: 13px; text-align: left; white-space: nowrap;}
+        th { background-color: #f8f9fa; }
+        .status { margin-top: 10px; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+<div id="loginContainer">
+    <h2 style="text-align: center;">Login to Report</h2>
+    <div class="login-group">
+        <label>Email</label>
+        <input type="email" id="email" placeholder="email@example.com">
+    </div>
+    <div class="login-group">
+        <label>Password</label>
+        <input type="password" id="password" placeholder="******">
+    </div>
+    <button id="btnLogin">LOGIN</button>
+    <div id="loginMessage" style="color: red; font-size: 12px; margin-top: 10px; text-align: center;"></div>
+</div>
+
+<div id="mainContent">
+    <div class="header-bar">
+        <h2>Balance Flow</h2>
+        <div>
+            <span id="userEmail" style="font-size: 13px; margin-right: 15px; color: #666;"></span>
+            <button id="btnLogout">LOGOUT</button>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="parameter-section">
+            <div class="input-group">
+                <label>Tanggal Mulai</label>
+                <input type="date" id="startDate">
+            </div>
+            <div class="input-group">
+                <label>Tanggal Selesai</label>
+                <input type="date" id="endDate">
+            </div>
+            <button id="btnView">VIEW REPORT</button>
+            <button id="btnExport">EXPORT TO EXCEL</button>
+        </div>
+
+        <div id="loadingStatus" class="status"></div>
+        <div class="table-responsive">
+            <table id="reportTable">
+                <thead><tr id="tableHeader"></tr></thead>
+                <tbody id="tableBody">
+                    <tr><td colspan="100%" style="text-align: center; color: #999; padding: 20px;">Pilih parameter untuk memulai</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    const SB_URL = 'https://jyxbmligiunpchkfykjj.supabase.co';
+    const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5eGJtbGlnaXVucGNoa2Z5a2pqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU0ODU4MTksImV4cCI6MjA4MTA2MTgxOX0.82bKqOXPya8jqnp9grZcD9FJJ9kdRqWHXTfn39rryFs'; // Gunakan Anon Key Anda
+    const supabaseClient = supabase.createClient(SB_URL, SB_KEY);
+
+    let currentData = [];
+
+    // --- LOGIKA AUTHENTICATION ---
+
+    // Cek status login saat halaman dibuka
+    window.onload = async () => {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        updateUI(session);
+    };
+
+    // Fungsi Login
+    document.getElementById('btnLogin').addEventListener('click', async () => {
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const msg = document.getElementById('loginMessage');
+
+        msg.innerText = "Authenticating...";
+
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
+            email: email,
+            password: password,
+        });
+
+        if (error) {
+            msg.innerText = "Login Gagal: " + error.message;
+        } else {
+            updateUI(data.session);
+        }
+    });
+
+    // Fungsi Logout
+    document.getElementById('btnLogout').addEventListener('click', async () => {
+        await supabaseClient.auth.signOut();
+        updateUI(null);
+    });
+
+    // Update Tampilan berdasarkan status login
+    function updateUI(session) {
+        if (session) {
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            document.getElementById('userEmail').innerText = session.user.email;
+        } else {
+            document.getElementById('loginContainer').style.display = 'block';
+            document.getElementById('mainContent').style.display = 'none';
+        }
+    }
+
+    // --- LOGIKA LAPORAN (Sama seperti sebelumnya) ---
+
+    document.getElementById('btnView').addEventListener('click', fetchData);
+    document.getElementById('btnExport').addEventListener('click', exportToExcel);
+
+    async function fetchData() {
+        const start = document.getElementById('startDate').value;
+        const end = document.getElementById('endDate').value;
+        const statusDiv = document.getElementById('loadingStatus');
+        const btnExport = document.getElementById('btnExport');
+        
+        if (!start || !end) { alert("Harap isi tanggal!"); return; }
+
+        statusDiv.innerText = "Sabar, sedang mengambil data...";
+        btnExport.style.display = 'none';
+
+        try {
+            const { data, error } = await supabaseClient
+                .schema('project1')
+                .from('summary_balance_flow') 
+                .select('keterangan,flag,tanggal_proses,jumlah_transaksi,amount,rate_pt,saldo_di_pt,rate_vendor,saldo_di_vendor,profit_pt,balance,balance_settle')
+                .gte('tanggal_proses', start)
+                .lte('tanggal_proses', end)
+                .order('urutan', { ascending: true });
+
+            if (error) throw error;
+
+            currentData = data;
+            renderTable(data);
+            
+            if (data.length > 0) {
+                btnExport.style.display = 'inline-block';
+                statusDiv.innerText = `Ditemukan ${data.length} data.`;
+            } else {
+                statusDiv.innerText = "Data tidak ditemukan.";
+            }
+
+        } catch (err) {
+            statusDiv.innerText = "Error: " + err.message;
+        }
+    }
+
+    function renderTable(data) {
+        const headerRow = document.getElementById('tableHeader');
+        const bodyRow = document.getElementById('tableBody');
+        headerRow.innerHTML = '';
+        bodyRow.innerHTML = '';
+
+        if (!data || data.length === 0) return;
+
+        Object.keys(data[0]).forEach(key => {
+            let th = document.createElement('th');
+            th.innerText = key.toUpperCase();
+            headerRow.appendChild(th);
+        });
+
+        data.forEach(item => {
+            let tr = document.createElement('tr');
+            Object.values(item).forEach(val => {
+                let td = document.createElement('td');
+                td.innerText = val;
+                tr.appendChild(td);
+            });
+            bodyRow.appendChild(tr);
+        });
+    }
+
+    function exportToExcel() {
+        if (currentData.length === 0) return;
+        const worksheet = XLSX.utils.json_to_sheet(currentData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan");
+        XLSX.writeFile(workbook, `Report_${new Date().getTime()}.xlsx`);
+    }
+</script>
+
+</body>
+</html>
